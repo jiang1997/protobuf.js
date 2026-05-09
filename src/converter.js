@@ -106,12 +106,19 @@ function genValuePartial_fromObject(gen, field, fieldIndex, prop) {
 converter.fromObject = function fromObject(mtype) {
     /* eslint-disable no-unexpected-multiline, block-scoped-var, no-redeclare */
     var fields = mtype.fieldsArray;
+    var aliasSpec = [];
+    for (var ai = 0; ai < fields.length; ++ai) {
+        var af = fields[ai];
+        af.resolve();
+        aliasSpec.push(af.name, af.originalName, af.jsonName, af.fullName || af.name);
+    }
     var gen = util.codegen(["d", "q"], mtype.name + "$fromObject")
     ("if(d instanceof this.ctor)")
         ("return d")
     ("if(q===undefined)q=0")
     ("if(q>util.recursionLimit)")
-        ("throw Error(\"max depth exceeded\")");
+        ("throw Error(\"max depth exceeded\")")
+    ("d=util.normalizeFromObjectInput(d,%j)", aliasSpec);
     if (!fields.length) return gen
     ("return new this.ctor");
     gen
@@ -236,6 +243,19 @@ converter.toObject = function toObject(mtype) {
     var fields = mtype.fieldsArray.slice().sort(util.compareFieldsById);
     if (!fields.length)
         return util.codegen()("return {}");
+
+    // Build a flat [name, jsonName] alias pair list used to rename keys for
+    // ProtoJSON output (when o.json is truthy). Only fields whose
+    // internal .name differs from their spec lowerCamelCase JSON name are
+    // listed; the runtime helper is a no-op otherwise.
+    var jsonRename = [];
+    for (var jr = 0; jr < fields.length; ++jr) {
+        var jrf = fields[jr];
+        jrf.resolve();
+        if (jrf.name !== jrf.jsonName)
+            jsonRename.push(jrf.name, jrf.jsonName);
+    }
+
     var gen = util.codegen(["m", "o"], mtype.name + "$toObject")
     ("if(!o)")
         ("o={}")
@@ -332,6 +352,6 @@ converter.toObject = function toObject(mtype) {
     ("}");
     }
     return gen
-    ("return d");
+    ("return o.json?util.applyJsonNames(d,%j):d", jsonRename);
     /* eslint-enable no-unexpected-multiline, block-scoped-var, no-redeclare */
 };

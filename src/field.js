@@ -250,6 +250,38 @@ Object.defineProperty(Field.prototype, "hasPresence", {
 });
 
 /**
+ * The original proto-defined field name, before any camelCase conversion.
+ * Falls back to {@link Field#name} if the parser did not record one
+ * (e.g. fields constructed directly via {@link Field.fromJSON} from a
+ * descriptor that has already been camelCased).
+ * @name Field#originalName
+ * @type {string}
+ * @readonly
+ */
+Object.defineProperty(Field.prototype, "originalName", {
+    get: function() {
+        return this._originalName || this.name;
+    }
+});
+
+/**
+ * The lowerCamelCase JSON name for this field per the ProtoJSON spec.
+ * Honors an explicit `[json_name = "..."]` option when present, otherwise
+ * derived from {@link Field#originalName} via {@link util.jsonName}.
+ * @name Field#jsonName
+ * @type {string}
+ * @readonly
+ */
+Object.defineProperty(Field.prototype, "jsonName", {
+    get: function() {
+        var explicit = this.options && this.options["json_name"];
+        if (typeof explicit === "string" && explicit.length)
+            return explicit;
+        return util.jsonName(this.originalName);
+    }
+});
+
+/**
  * @override
  */
 Field.prototype.setOption = function setOption(name, value, ifNotSet) {

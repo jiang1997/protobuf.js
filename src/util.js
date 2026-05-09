@@ -102,6 +102,30 @@ util.camelCase = function camelCase(str) {
 };
 
 /**
+ * Converts a proto field name to its lowerCamelCase JSON name per the
+ * ProtoJSON spec (descriptor.cc ToJsonName): drop every "_", and uppercase
+ * the character that immediately follows.
+ * @param {string} str Proto field name
+ * @returns {string} JSON name
+ */
+util.jsonName = function jsonName(str) {
+    var result = "",
+        capitalizeNext = false;
+    for (var i = 0; i < str.length; ++i) {
+        var c = str.charAt(i);
+        if (c === "_") {
+            capitalizeNext = true;
+        } else if (capitalizeNext) {
+            result += c.toUpperCase();
+            capitalizeNext = false;
+        } else {
+            result += c;
+        }
+    }
+    return result;
+};
+
+/**
  * Compares reflected fields by id.
  * @param {Field} a First field
  * @param {Field} b Second field

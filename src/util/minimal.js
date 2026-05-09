@@ -273,6 +273,107 @@ util.merge = merge;
 util.recursionLimit = 100;
 
 /**
+ * Renames keys of a `toObject` output object from each field's internal
+ * `.name` to its lowerCamelCase JSON name, used when emitting ProtoJSON.
+ * Preserves insertion order via a fresh shallow copy.
+ *
+ * The `pairs` argument is a flat `[name, jsonName, ...]` array baked at
+ * codegen time, listing only fields whose names actually differ.
+ *
+ * @memberof util
+ * @param {Object} d Object emitted by toObject
+ * @param {Array.<string>} pairs Flat [name, jsonName, ...] rename pairs
+ * @returns {Object} `d` with keys renamed where applicable
+ */
+util.applyJsonNames = function applyJsonNames(d, pairs) {
+    if (!pairs || !pairs.length || !d || typeof d !== "object")
+        return d;
+    // Build a name->jsonName lookup once. Skip any pairs whose target key
+    // already exists on d (e.g., if name === jsonName for some fields, or
+    // a legitimate alias was preserved by a prior pass).
+    var rename = {};
+    for (var i = 0; i < pairs.length; i += 2)
+        rename[pairs[i]] = pairs[i + 1];
+    var out = {};
+    var keys = Object.keys(d);
+    for (var k = 0; k < keys.length; ++k) {
+        var key = keys[k];
+        var renamed = rename[key];
+        out[renamed !== undefined ? renamed : key] = d[key];
+    }
+    return out;
+};
+
+/**
+ * Builds a JSON-name-normalized shallow copy of `d` for a message type's
+ * `fromObject`, mapping each field's spec-mandated input aliases (the proto
+ * original name and the lowerCamelCase JSON name) onto the field's
+ * internal `.name`. Throws on aliasing duplicates per the ProtoJSON spec
+ * (duplicate field entries — including ones that differ only in casing —
+ * are a parse error).
+ *
+ * Unknown keys (not matched by any field) are preserved on the returned
+ * object so they keep flowing through to downstream consumers (e.g.
+ * wrappers, oneofs by virtual name); the existing fromObject codegen
+ * ignores them.
+ *
+ * The `aliasSpec` argument is a flat array baked at codegen time, with
+ * groups of [name, originalName, jsonName, fullName] per field. Aliases
+ * equal to `name` are filtered at runtime so callers can pass duplicates.
+ *
+ * @memberof util
+ * @param {Object} d Plain input object
+ * @param {Array.<string>} aliasSpec Flat per-field alias spec
+ * @returns {Object} Normalized object keyed by field.name (or `d` itself if
+ * not a plain object)
+ */
+util.normalizeFromObjectInput = function normalizeFromObjectInput(d, aliasSpec) {
+    if (!d || typeof d !== "object" || Array.isArray(d))
+        return d;
+    var out = {};
+    var consumed = {};
+    var hasOwn = Object.prototype.hasOwnProperty;
+    var name, origName, jsonName, fullName, foundKey, foundVal;
+    for (var i = 0; i < aliasSpec.length; i += 4) {
+        name = aliasSpec[i];
+        origName = aliasSpec[i + 1];
+        jsonName = aliasSpec[i + 2];
+        fullName = aliasSpec[i + 3];
+        foundKey = null;
+        foundVal = null;
+        // Inline per-alias check (max 3) without allocating an array.
+        if (hasOwn.call(d, name)) {
+            foundKey = name;
+            foundVal = d[name];
+            consumed[name] = true;
+        }
+        if (origName !== name && hasOwn.call(d, origName)) {
+            if (foundKey !== null && foundKey !== origName)
+                throw Error("duplicate field " + fullName + " in JSON input (" + foundKey + " and " + origName + ")");
+            foundKey = origName;
+            foundVal = d[origName];
+            consumed[origName] = true;
+        }
+        if (jsonName !== name && jsonName !== origName && hasOwn.call(d, jsonName)) {
+            if (foundKey !== null && foundKey !== jsonName)
+                throw Error("duplicate field " + fullName + " in JSON input (" + foundKey + " and " + jsonName + ")");
+            foundKey = jsonName;
+            foundVal = d[jsonName];
+            consumed[jsonName] = true;
+        }
+        if (foundKey !== null)
+            out[name] = foundVal;
+    }
+    var keys = Object.keys(d);
+    for (var m = 0; m < keys.length; ++m) {
+        var key = keys[m];
+        if (!consumed[key] && !hasOwn.call(out, key))
+            out[key] = d[key];
+    }
+    return out;
+};
+
+/**
  * Makes a property safe for assignment as an own property.
  * @memberof util
  * @param {Object.<string,*>} obj Object

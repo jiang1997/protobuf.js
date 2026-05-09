@@ -472,10 +472,12 @@ function parse(source, root, options) {
         if (!nameRe.test(name))
             throw illegal(name, "name");
 
+        var originalName = name;
         name = applyCase(name);
         skip("=");
 
         var field = new Field(name, parseId(next()), type, rule, extend);
+        field._originalName = originalName;
 
         ifBlock(field, function parseField_block(token) {
 
@@ -614,6 +616,7 @@ function parse(source, root, options) {
 
         skip("=");
         var field = new MapField(applyCase(name), parseId(next()), keyType, valueType);
+        field._originalName = name;
         ifBlock(field, function parseMapField_block(token) {
 
             /* istanbul ignore else */
