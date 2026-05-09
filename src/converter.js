@@ -177,6 +177,181 @@ converter.fromObject = function fromObject(mtype) {
 };
 
 /**
+ * Generates a partial value fromJSON converter (strict variant of fromObject).
+ * Int/Uint scalars route through `util.strict.*`; other types reuse the
+ * lenient fromObject codepaths until those families have their own milestone.
+ * @param {Codegen} gen Codegen instance
+ * @param {Field} field Reflected field
+ * @param {number} fieldIndex Field index
+ * @param {string} prop Property reference
+ * @returns {Codegen} Codegen instance
+ * @ignore
+ */
+function genValuePartial_fromJSON(gen, field, fieldIndex, prop) {
+    var defaultAlreadyEmitted = false;
+    /* eslint-disable no-unexpected-multiline, block-scoped-var, no-redeclare */
+    if (field.resolvedType) {
+        if (field.resolvedType instanceof Enum) { gen
+            ("switch(d%s){", prop);
+            for (var values = field.resolvedType.values, keys = Object.keys(values), i = 0; i < keys.length; ++i) {
+                if (values[keys[i]] === field.typeDefault && !defaultAlreadyEmitted) { gen
+                    ("default:")
+                        ("if(typeof d%s===\"number\"){m%s=d%s;break}", prop, prop, prop);
+                    if (!field.repeated) gen
+                        ("break");
+                    defaultAlreadyEmitted = true;
+                }
+                gen
+                ("case%j:", keys[i])
+                ("case %i:", values[keys[i]])
+                    ("m%s=%j", prop, values[keys[i]])
+                    ("break");
+            } gen
+            ("}");
+        } else gen
+            ("if(typeof d%s!==\"object\")", prop)
+                ("throw TypeError(%j)", field.fullName + ": object expected")
+            ("m%s=types[%i].fromJSON(d%s,q+1)", prop, fieldIndex, prop);
+    } else {
+        switch (field.type) {
+            case "double":
+            case "float": gen
+                ("m%s=Number(d%s)", prop, prop);
+                break;
+            case "uint32":
+            case "fixed32": gen
+                ("m%s=util.strict.uint32(d%s,%j)", prop, prop, field.fullName);
+                break;
+            case "int32":
+            case "sint32":
+            case "sfixed32": gen
+                ("m%s=util.strict.int32(d%s,%j)", prop, prop, field.fullName);
+                break;
+            case "uint64":
+            case "fixed64": gen
+                ("m%s=util.strict.int64(d%s,%j,false,%j)", prop, prop, field.fullName, !!field.long);
+                break;
+            case "int64":
+            case "sint64":
+            case "sfixed64": gen
+                ("m%s=util.strict.int64(d%s,%j,true,%j)", prop, prop, field.fullName, !!field.long);
+                break;
+            case "bytes": gen
+                ("if(typeof d%s===\"string\")", prop)
+                    ("util.base64.decode(d%s,m%s=util.newBuffer(util.base64.length(d%s)),0)", prop, prop, prop)
+                ("else if(d%s.length>=0)", prop)
+                    ("m%s=d%s", prop, prop);
+                break;
+            case "string": gen
+                ("m%s=String(d%s)", prop, prop);
+                break;
+            case "bool": gen
+                ("m%s=Boolean(d%s)", prop, prop);
+                break;
+        }
+    }
+    return gen;
+    /* eslint-enable no-unexpected-multiline, block-scoped-var, no-redeclare */
+}
+
+/**
+ * Generates a strict JSON-to-runtime-message converter for a specific message
+ * type. Unlike {@link converter.fromObject}, this rejects malformed bare
+ * Int/Uint scalars rather than silently coercing them. Accepts either a parsed
+ * plain object or a JSON-encoded string at the top level.
+ * @param {Type} mtype Message type
+ * @returns {Codegen} Codegen instance
+ */
+converter.fromJSON = function fromJSON(mtype) {
+    /* eslint-disable no-unexpected-multiline, block-scoped-var, no-redeclare */
+    var fields = mtype.fieldsArray;
+    var gen = util.codegen(["d", "q"], mtype.name + "$fromJSON")
+    ("if(typeof d===\"string\")")
+        ("d=JSON.parse(d)")
+    ("if(d instanceof this.ctor)")
+        ("return d")
+    ("if(q===undefined)q=0")
+    ("if(q>util.recursionLimit)")
+        ("throw Error(\"max depth exceeded\")");
+    if (!fields.length) return gen
+    ("return new this.ctor");
+    gen
+    ("var m=new this.ctor");
+    for (var i = 0; i < fields.length; ++i) {
+        var field  = fields[i].resolve(),
+            prop   = util.safeProp(field.name),
+            implicitPresence = !field.hasPresence && !field.repeated && !field.map
+                && (field.resolvedType instanceof Enum || types.basic[field.type] !== undefined);
+
+        if (field.map) { gen
+    ("if(d%s){", prop)
+        ("if(typeof d%s!==\"object\")", prop)
+            ("throw TypeError(%j)", field.fullName + ": object expected")
+        ("m%s={}", prop)
+        ("for(var ks=Object.keys(d%s),i=0;i<ks.length;++i){", prop);
+            gen
+        ("if(ks[i]===\"__proto__\")")
+            ("util.makeProp(m%s,ks[i])", prop);
+            genValuePartial_fromJSON(gen, field, /* not sorted */ i, prop + "[ks[i]]")
+        ("}")
+    ("}");
+
+        } else if (field.repeated) { gen
+    ("if(d%s){", prop)
+        ("if(!Array.isArray(d%s))", prop)
+            ("throw TypeError(%j)", field.fullName + ": array expected")
+        ("m%s=Array(d%s.length)", prop, prop)
+        ("for(var i=0;i<d%s.length;++i){", prop);
+            genValuePartial_fromJSON(gen, field, /* not sorted */ i, prop + "[i]")
+        ("}")
+    ("}");
+
+        } else {
+            if (!(field.resolvedType instanceof Enum)) gen
+    ("if(d%s!=null){", prop);
+            // The lenient `Number(d)!==0` implicit-presence skip used by
+            // fromObject silently absorbs invalid input (e.g., `""` coerces
+            // to 0). For strict numeric fields we validate unconditionally
+            // and `delete` the resulting own property when it equals the
+            // default, restoring prototype inheritance so toObject correctly
+            // omits the field.
+            var isStrictNumeric = !field.resolvedType && (
+                types.long[field.type] !== undefined
+                || field.type === "int32" || field.type === "sint32" || field.type === "sfixed32"
+                || field.type === "uint32" || field.type === "fixed32"
+            );
+            if (implicitPresence && !isStrictNumeric) {
+                if (field.resolvedType instanceof Enum) gen
+    ("if(d%s!==%j&&(typeof d%s!==\"string\"||types[%i].values[d%s]!==%j)){", prop, field.typeDefault, prop, i, prop, field.typeDefault);
+                else if (field.type === "string") gen
+    ("if(typeof d%s!==\"string\"||d%s.length){", prop, prop);
+                else if (field.type === "bytes") gen
+    ("if(d%s.length){", prop);
+                else if (field.type === "bool") gen
+    ("if(d%s){", prop);
+                else if (types.long[field.type] !== undefined) gen
+    ("if(typeof d%s===\"object\"?d%s.low||d%s.high:Number(d%s)!==0){", prop, prop, prop, prop);
+                else gen
+    ("if(Number(d%s)!==0){", prop);
+            }
+        genValuePartial_fromJSON(gen, field, /* not sorted */ i, prop);
+            if (implicitPresence && !isStrictNumeric) gen
+    ("}");
+            if (implicitPresence && isStrictNumeric) {
+                if (types.long[field.type] !== undefined) gen
+    ("if(typeof m%s===\"object\"?!(m%s.low||m%s.high):Number(m%s)===0)delete m%s", prop, prop, prop, prop, prop);
+                else gen
+    ("if(m%s===0)delete m%s", prop, prop);
+            }
+            if (!(field.resolvedType instanceof Enum)) gen
+    ("}");
+        }
+    } return gen
+    ("return m");
+    /* eslint-enable no-unexpected-multiline, block-scoped-var, no-redeclare */
+};
+
+/**
  * Generates a partial value toObject converter.
  * @param {Codegen} gen Codegen instance
  * @param {Field} field Reflected field

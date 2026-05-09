@@ -91,7 +91,9 @@ try {
                             message = type.decode(request.protobufPayload);
                             break;
                         case "jsonPayload":
-                            message = type.fromObject(JSON.parse(request.jsonPayload));
+                            // Static pbjs classes lack fromJSON; use the reflection
+                            // Type so the strict ProtoJSON parser is exercised.
+                            message = testCase.textType.fromJSON(request.jsonPayload);
                             break;
                         case "jspbPayload":
                             response = { parseError: "JSPB not supported" };

@@ -129,6 +129,14 @@ export namespace converter {
     function fromObject(mtype: Type): Codegen;
 
     /**
+     * Generates a strict ProtoJSON to runtime message converter specific to the specified message type.
+     * Mirrors `fromObject` but rejects malformed bare scalar Int/Uint values instead of silently coercing.
+     * @param mtype Message type
+     * @returns Codegen instance
+     */
+    function fromJSON(mtype: Type): Codegen;
+
+    /**
      * Generates a runtime message to plain object converter specific to the specified message type.
      * @param mtype Message type
      * @returns Codegen instance
@@ -1761,6 +1769,17 @@ export class Type extends NamespaceBase {
      * @returns Message instance
      */
     public fromObject(object: { [k: string]: any }): Message<{}>;
+
+    /**
+     * Creates a new message of this type from a ProtoJSON value, applying strict validation.
+     * Bare scalar Int/Uint inputs that violate the ProtoJSON grammar (whitespace, leading "+",
+     * leading zeros, hex, NaN/Infinity, out-of-range) are rejected rather than silently coerced.
+     * Wrapped well-known types (Any, Timestamp, Duration, Struct, Value, ListValue, FieldMask)
+     * fall back to the lenient `fromObject` path so their wrapper logic stays in charge.
+     * @param source Plain object or JSON string
+     * @returns Message instance
+     */
+    public fromJSON(source: string | { [k: string]: any }): Message<{}>;
 
     /**
      * Creates a plain object from a message of this type. Also converts values to other types if specified.

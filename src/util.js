@@ -15,6 +15,8 @@ util.codegen  = require("./util/codegen");
 util.fetch    = require("./util/fetch");
 util.path     = require("./util/path");
 util.patterns = require("./util/patterns");
+util.strict   = require("./util/strict");
+util.strict._setLong(util.Long);
 
 var reservedRe = util.patterns.reservedRe,
     unsafePropertyRe = util.patterns.unsafePropertyRe;

@@ -487,6 +487,10 @@ Type.prototype.setup = function setup() {
         types : types,
         util  : util
     });
+    this.fromJSON = converter.fromJSON(this)({
+        types : types,
+        util  : util
+    });
     this.toObject = converter.toObject(this)({
         types : types,
         util  : util
@@ -500,6 +504,8 @@ Type.prototype.setup = function setup() {
         wrapperThis._ctor = this.ctor;
         wrapperThis.fromObject = this.fromObject;
         this.fromObject = wrapper.fromObject.bind(wrapperThis);
+        // Wrapped types stay lenient: route fromJSON through the wrapper's fromObject.
+        this.fromJSON = this.fromObject;
         wrapperThis.toObject = this.toObject;
         this.toObject = wrapper.toObject.bind(wrapperThis);
     }
@@ -568,6 +574,18 @@ Type.prototype.verify = function verify_setup(message) { // eslint-disable-line 
  */
 Type.prototype.fromObject = function fromObject(object) { // eslint-disable-line no-unused-vars
     return this.setup().fromObject.apply(this, arguments);
+};
+
+/**
+ * Creates a new message of this type by parsing a JSON document. Unlike
+ * {@link Type#fromObject}, malformed bare Int/Uint scalars are rejected
+ * rather than silently coerced. Accepts either a parsed plain object or a
+ * JSON-encoded string.
+ * @param {Object.<string,*>|string} source Parsed object or JSON string to convert
+ * @returns {Message<{}>} Message instance
+ */
+Type.prototype.fromJSON = function fromJSON(source) { // eslint-disable-line no-unused-vars
+    return this.setup().fromJSON.apply(this, arguments);
 };
 
 /**
