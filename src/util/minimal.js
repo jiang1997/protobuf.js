@@ -247,6 +247,153 @@ util.boolFromKey = function boolFromKey(key) {
     return key === "true" || key === "1";
 };
 
+// Strict numeric-string syntax mirroring proto-JSON: optional leading "-",
+// integer part (no leading zeros except "0"), optional fractional part,
+// optional exponent. No whitespace, no "+", no "NaN"/"Infinity". Used to
+// reject inputs like "12abc", " 1", "1 ", "" before forwarding to Number().
+var strictNumberRe = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/;
+
+/**
+ * Parses a value into a finite number suitable for an integer-valued field.
+ * Strings are accepted only if they match the strict proto-JSON numeric
+ * syntax; booleans, NaN, +/-Infinity, and other non-numeric values are
+ * rejected. Returns the numeric value (which may still be a non-integer or
+ * out-of-range; range/integer checks are the caller's responsibility).
+ * @param {*} value Value to parse
+ * @param {string} fullName Field name used in error messages
+ * @returns {number} Numeric value
+ * @throws {TypeError} If value is not a parseable numeric
+ */
+util.parseIntegerNumeric = function parseIntegerNumeric(value, fullName) {
+    var n;
+    if (typeof value === "number") {
+        n = value;
+    } else if (typeof value === "string") {
+        if (!strictNumberRe.test(value))
+            throw TypeError(fullName + ": invalid integer: " + JSON.stringify(value));
+        n = Number(value);
+    } else {
+        throw TypeError(fullName + ": integer expected");
+    }
+    if (!isFinite(n))
+        throw TypeError(fullName + ": invalid integer: " + JSON.stringify(value));
+    return n;
+};
+
+/**
+ * Strictly parses a value into a 32-bit signed/unsigned integer for proto-JSON.
+ * @param {*} value Value to parse
+ * @param {boolean} unsigned Whether the field is unsigned
+ * @param {string} fullName Field name used in error messages
+ * @returns {number} Integer value
+ * @throws {TypeError} If value is not a valid in-range integer
+ */
+util.toInt32 = function toInt32(value, unsigned, fullName) {
+    var n = util.parseIntegerNumeric(value, fullName);
+    if (Math.floor(n) !== n)
+        throw TypeError(fullName + ": non-integer value: " + JSON.stringify(value));
+    if (unsigned) {
+        if (n < 0 || n > 4294967295)
+            throw TypeError(fullName + ": value out of uint32 range: " + JSON.stringify(value));
+        return n >>> 0;
+    }
+    if (n < -2147483648 || n > 2147483647)
+        throw TypeError(fullName + ": value out of int32 range: " + JSON.stringify(value));
+    return n | 0;
+};
+
+/**
+ * Strictly parses a value into a Long-like 64-bit integer for proto-JSON.
+ * Accepts numbers, strict numeric strings, or Long-like {low,high} objects.
+ * Returns either a Long instance (when util.Long is available) or a number
+ * computed via LongBits, matching the pre-existing behaviour shape of
+ * src/converter.js for 64-bit fields.
+ * @param {*} value Value to parse
+ * @param {boolean} unsigned Whether the field is unsigned
+ * @param {string} fullName Field name used in error messages
+ * @returns {Long|number} Long value (or number when Long is unavailable)
+ * @throws {TypeError} If value is not a valid in-range integer
+ */
+util.toLong = function toLong(value, unsigned, fullName) {
+    // Long-like object: pass through to existing low/high reconstruction.
+    if (value && typeof value === "object" && typeof value !== "boolean"
+        && (typeof value.low === "number" || typeof value.high === "number")) {
+        if (util.Long) {
+            var l = util.Long.fromValue(value);
+            l.unsigned = unsigned;
+            return l;
+        }
+        return new util.LongBits(value.low >>> 0, value.high >>> 0).toNumber(Boolean(unsigned));
+    }
+    if (typeof value === "boolean")
+        throw TypeError(fullName + ": integer expected");
+    var isString = typeof value === "string";
+    if (!isString && typeof value !== "number")
+        throw TypeError(fullName + ": integer expected");
+    if (isString) {
+        if (!strictNumberRe.test(value))
+            throw TypeError(fullName + ": invalid integer: " + JSON.stringify(value));
+    } else if (!isFinite(value)) {
+        throw TypeError(fullName + ": invalid integer: " + JSON.stringify(value));
+    }
+    if (util.Long) {
+        var long = isString ? util.Long.fromString(value, unsigned) : util.Long.fromNumber(value, unsigned);
+        // Reject non-integer numeric input and detect overflow by round-trip.
+        if (isString) {
+            if (long.toString() !== normalizeIntString(value, unsigned))
+                throw TypeError(fullName + ": value out of " + (unsigned ? "uint64" : "int64") + " range: " + JSON.stringify(value));
+        } else {
+            if (Math.floor(value) !== value)
+                throw TypeError(fullName + ": non-integer value: " + JSON.stringify(value));
+            // The exact (u)int64 boundaries are not representable in IEEE-754
+            // doubles; use the next representable double-precision value that
+            // is guaranteed to lie strictly outside the legal range.
+            // Largest double <= uint64 max: 2^64 = 18446744073709551616
+            // (representable as a double; values >= it are out of range).
+            // Smallest double >= -2^63: -9223372036854775808 rounds to that
+            // exact double, so values < -2^63 (i.e. <= -2^63 - 1024) are out.
+            if (unsigned
+                ? value < 0 || value >= 1.8446744073709552e19
+                : value >= 9.223372036854776e18 || value < -9.223372036854776e18)
+                throw TypeError(fullName + ": value out of " + (unsigned ? "uint64" : "int64") + " range: " + JSON.stringify(value));
+        }
+        long.unsigned = unsigned;
+        return long;
+    }
+    // No Long available: fall back to a Number, matching the prior fallback.
+    if (isString) {
+        // Reject fractional strings (parseInt would silently truncate).
+        if (/[.eE]/.test(value)) {
+            var nv = Number(value);
+            if (Math.floor(nv) !== nv)
+                throw TypeError(fullName + ": non-integer value: " + JSON.stringify(value));
+            return nv;
+        }
+        return parseInt(value, 10);
+    }
+    if (Math.floor(value) !== value)
+        throw TypeError(fullName + ": non-integer value: " + JSON.stringify(value));
+    return value;
+};
+
+// Normalises a strict numeric string into the canonical integer form Long
+// would produce, so we can compare round-trip strings to detect overflow or
+// non-integer input.
+function normalizeIntString(value, unsigned) {
+    var n = Number(value);
+    if (Math.floor(n) !== n)
+        return null; // non-integer; caller compare will mismatch
+    if (/[.eE]/.test(value)) {
+        // Reconstruct an integer string from the numeric value.
+        if (!isFinite(n)) return null;
+        return n.toString();
+    }
+    // Strip leading "+" (not allowed anyway) and superfluous "-0" -> "0".
+    if (value === "-0") return "0";
+    if (unsigned && value.charAt(0) === "-" && n === 0) return "0";
+    return value;
+}
+
 /**
  * Merges the properties of the source object into the destination object.
  * @memberof util

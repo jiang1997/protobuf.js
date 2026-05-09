@@ -54,12 +54,12 @@ function genValuePartial_fromObject(gen, field, fieldIndex, prop) {
                 break;
             case "uint32":
             case "fixed32": gen
-                ("m%s=d%s>>>0", prop, prop);
+                ("m%s=util.toInt32(d%s,true,%j)", prop, prop, field.fullName);
                 break;
             case "int32":
             case "sint32":
             case "sfixed32": gen
-                ("m%s=d%s|0", prop, prop);
+                ("m%s=util.toInt32(d%s,false,%j)", prop, prop, field.fullName);
                 break;
             case "uint64":
                 isUnsigned = true;
@@ -68,14 +68,7 @@ function genValuePartial_fromObject(gen, field, fieldIndex, prop) {
             case "sint64":
             case "fixed64":
             case "sfixed64": gen
-                ("if(util.Long)")
-                    ("(m%s=util.Long.fromValue(d%s)).unsigned=%j", prop, prop, isUnsigned)
-                ("else if(typeof d%s===\"string\")", prop)
-                    ("m%s=parseInt(d%s,10)", prop, prop)
-                ("else if(typeof d%s===\"number\")", prop)
-                    ("m%s=d%s", prop, prop)
-                ("else if(typeof d%s===\"object\")", prop)
-                    ("m%s=new util.LongBits(d%s.low>>>0,d%s.high>>>0).toNumber(%s)", prop, prop, prop, isUnsigned ? "true" : "");
+                ("m%s=util.toLong(d%s,%j,%j)", prop, prop, isUnsigned, field.fullName);
                 break;
             case "bytes": gen
                 ("if(typeof d%s===\"string\")", prop)
@@ -151,7 +144,31 @@ converter.fromObject = function fromObject(mtype) {
         } else {
             if (!(field.resolvedType instanceof Enum)) gen // no need to test for null/undefined if an enum (uses switch)
     ("if(d%s!=null){", prop); // !== undefined && !== null
-            if (implicitPresence) {
+            // For integer types with implicit presence the legacy fast-path
+            // (`if(Number(d.f)!==0){...}`) silently dropped malformed input
+            // (e.g. "" or "abc") because Number("") === 0 short-circuits the
+            // wrapper before validation runs. We must validate first, then
+            // skip the assignment when the parsed value is the zero default.
+            var intParse = null;
+            if (implicitPresence && !(field.resolvedType instanceof Enum)) {
+                if (field.type === "uint32" || field.type === "fixed32")
+                    intParse = "util.toInt32(d" + prop + ",true," + JSON.stringify(field.fullName) + ")";
+                else if (field.type === "int32" || field.type === "sint32" || field.type === "sfixed32")
+                    intParse = "util.toInt32(d" + prop + ",false," + JSON.stringify(field.fullName) + ")";
+                else if (types.long[field.type] !== undefined)
+                    intParse = "util.toLong(d" + prop + "," + (field.type === "uint64" || field.type === "fixed64") + "," + JSON.stringify(field.fullName) + ")";
+            }
+            if (intParse) {
+                // Validate first; only assign when not the zero default.
+                if (types.long[field.type] !== undefined) gen
+    ("var lv=%s", intParse)
+    ("if(typeof lv===\"number\"?lv:lv.low||lv.high){")
+        ("m%s=lv", prop);
+                else gen
+    ("var iv=%s", intParse)
+    ("if(iv){")
+        ("m%s=iv", prop);
+            } else if (implicitPresence) {
                 if (field.resolvedType instanceof Enum) gen
     ("if(d%s!==%j&&(typeof d%s!==\"string\"||types[%i].values[d%s]!==%j)){", prop, field.typeDefault, prop, i, prop, field.typeDefault);
                 else if (field.type === "string") gen
@@ -160,12 +177,11 @@ converter.fromObject = function fromObject(mtype) {
     ("if(d%s.length){", prop);
                 else if (field.type === "bool") gen
     ("if(d%s){", prop);
-                else if (types.long[field.type] !== undefined) gen
-    ("if(typeof d%s===\"object\"?d%s.low||d%s.high:Number(d%s)!==0){", prop, prop, prop, prop);
                 else gen
     ("if(Number(d%s)!==0){", prop);
             }
-        genValuePartial_fromObject(gen, field, /* not sorted */ i, prop);
+            if (!intParse)
+                genValuePartial_fromObject(gen, field, /* not sorted */ i, prop);
             if (implicitPresence) gen
     ("}");
             if (!(field.resolvedType instanceof Enum)) gen
