@@ -87,7 +87,9 @@ function genValuePartial_fromObject(gen, field, fieldIndex, prop) {
                 ("m%s=String(d%s)", prop, prop);
                 break;
             case "bool": gen
-                ("m%s=Boolean(d%s)", prop, prop);
+                ("if(typeof d%s!==\"boolean\")", prop)
+                    ("throw TypeError(%j)", field.fullName + ": boolean expected")
+                ("m%s=d%s", prop, prop);
                 break;
             /* default: gen
                 ("m%s=d%s", prop, prop);
@@ -159,7 +161,7 @@ converter.fromObject = function fromObject(mtype) {
                 else if (field.type === "bytes") gen
     ("if(d%s.length){", prop);
                 else if (field.type === "bool") gen
-    ("if(d%s){", prop);
+    ("if(typeof d%s!==\"boolean\"||d%s){", prop, prop);
                 else if (types.long[field.type] !== undefined) gen
     ("if(typeof d%s===\"object\"?d%s.low||d%s.high:Number(d%s)!==0){", prop, prop, prop, prop);
                 else gen
