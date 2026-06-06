@@ -10,6 +10,21 @@ var wrappers = exports;
 var Message = require("./message"),
     util    = require("./util/minimal");
 
+function typeNameFromAnyUrl(typeUrl) {
+    var slash = typeUrl.lastIndexOf("/");
+    if (slash <= 0 || slash === typeUrl.length - 1)
+        throw Error("invalid Any type URL: " + typeUrl);
+    var name = typeUrl.substring(slash + 1);
+    if (name.charAt(0) === ".")
+        throw Error("invalid Any type URL: " + typeUrl);
+    return name;
+}
+
+function lookupAnyType(root, typeUrl) {
+    var name = typeNameFromAnyUrl(typeUrl);
+    return root.lookupType(name);
+}
+
 /**
  * From object converter part of an {@link IWrapper}.
  * @typedef WrapperFromObjectConverter
@@ -43,23 +58,11 @@ wrappers[".google.protobuf.Any"] = {
 
         // unwrap value type if mapped
         if (object && object["@type"]) {
-             // Only use fully qualified type name after the last '/'
-            var name = object["@type"].substring(object["@type"].lastIndexOf("/") + 1);
-            var type = this.lookup(name);
-            /* istanbul ignore else */
-            if (type) {
-                // type_url does not accept leading "."
-                var type_url = object["@type"].charAt(0) === "." ?
-                    object["@type"].slice(1) : object["@type"];
-                // type_url prefix is optional, but path seperator is required
-                if (type_url.indexOf("/") === -1) {
-                    type_url = "/" + type_url;
-                }
-                return this.create({
-                    type_url: type_url,
-                    value: type.encode(type.fromObject(object, depth === undefined ? 1 : depth + 1)).finish()
-                });
-            }
+            var type = lookupAnyType(this.root, object["@type"]);
+            return this.create({
+                type_url: object["@type"],
+                value: type.encode(type.fromObject(object, depth === undefined ? 1 : depth + 1)).finish()
+            });
         }
 
         return this.fromObject(object, depth);
@@ -74,17 +77,12 @@ wrappers[".google.protobuf.Any"] = {
         // Default prefix
         var googleApi = "type.googleapis.com/";
         var prefix = "";
-        var name = "";
         // decode value if requested and unmapped
         if (options && options.json && message.type_url && message.value) {
-            // Only use fully qualified type name after the last '/'
-            name = message.type_url.substring(message.type_url.lastIndexOf("/") + 1);
             // Separate the prefix used
             prefix = message.type_url.substring(0, message.type_url.lastIndexOf("/") + 1);
-            var type = this.lookup(name);
-            /* istanbul ignore else */
-            if (type)
-                message = type.decode(message.value, undefined, undefined, depth + 1);
+            var type = lookupAnyType(this.root, message.type_url);
+            message = type.decode(message.value, undefined, undefined, depth + 1);
         }
 
         // wrap value if unmapped
@@ -96,7 +94,7 @@ wrappers[".google.protobuf.Any"] = {
             if (prefix === "") {
                 prefix = googleApi;
             }
-            name = prefix + messageName;
+            var name = prefix + messageName;
             object["@type"] = name;
             return object;
         }

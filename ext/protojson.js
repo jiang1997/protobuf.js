@@ -387,6 +387,21 @@ function hasOwn(o, k) {
     return o != null && Object.prototype.hasOwnProperty.call(o, k);
 }
 
+function typeNameFromAnyUrl(typeUrl) {
+    var slash = typeUrl.lastIndexOf("/");
+    if (slash <= 0 || slash === typeUrl.length - 1)
+        throw Error("invalid Any type URL: " + typeUrl);
+    var name = typeUrl.substring(slash + 1);
+    if (name.charAt(0) === ".")
+        throw Error("invalid Any type URL: " + typeUrl);
+    return name;
+}
+
+function lookupAnyType(root, typeUrl) {
+    var name = typeNameFromAnyUrl(typeUrl);
+    return root.lookupType(name);
+}
+
 function setOwn(o, k, v) {
     if (k === "__proto__")
         util.makeProp(o, k);
@@ -700,8 +715,7 @@ WKT_FROM[".google.protobuf.Any"] = function (type, value, options, depth) {
         return {};
     if (typeof typeUrl !== "string")
         throw Error("google.protobuf.Any @type must be a string");
-    var name = typeUrl.substring(typeUrl.lastIndexOf("/") + 1),
-        msgType = type.root.lookupType(name),
+    var msgType = lookupAnyType(type.root, typeUrl),
         custom = WKT_FROM[msgType.fullName] !== undefined,
         body;
     if (custom)
@@ -713,16 +727,12 @@ WKT_FROM[".google.protobuf.Any"] = function (type, value, options, depth) {
                 setOwn(body, k, value[k]);
     }
     var inner = readMessage(msgType, body, options, depth + 1);
-    var url = typeUrl.charAt(0) === "." ? typeUrl.slice(1) : typeUrl;
-    if (url.indexOf("/") === -1)
-        url = "/" + url;
-    return { type_url: url, value: msgType.encode(inner).finish() };
+    return { type_url: typeUrl, value: msgType.encode(inner).finish() };
 };
 WKT_TO[".google.protobuf.Any"] = function (type, message, options, depth) {
     if (!message.type_url)
         return {};
-    var name = message.type_url.substring(message.type_url.lastIndexOf("/") + 1),
-        msgType = type.root.lookupType(name),
+    var msgType = lookupAnyType(type.root, message.type_url),
         decoded = msgType.decode(message.value),
         body = toJsonValue(msgType, decoded, options, depth + 1),
         result;

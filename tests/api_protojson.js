@@ -350,6 +350,146 @@ tape.test("protojson - preserves reserved object keys as data", function(test) {
     test.end();
 });
 
+tape.test("protojson - validates Any @type URL shape before lookup", function(test) {
+    var root = protobuf.Root.fromJSON({
+        nested: {
+            google: {
+                nested: {
+                    protobuf: {
+                        nested: {
+                            Any: {
+                                fields: {
+                                    type_url: { type: "string", id: 1 },
+                                    value: { type: "bytes", id: 2 }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            foo: {
+                nested: {
+                    Payload: {
+                        fields: {
+                            tag: { type: "string", id: 1 }
+                        }
+                    }
+                }
+            },
+            bar: {
+                nested: {
+                    Payload: {
+                        fields: {
+                            id: { type: "int32", id: 1 }
+                        }
+                    }
+                }
+            },
+            Envelope: {
+                fields: {
+                    any: { type: "google.protobuf.Any", id: 1 }
+                }
+            }
+        }
+    }).resolveAll();
+
+    var Envelope = root.lookupType("Envelope");
+
+    var packed = protojson.fromJson(Envelope, {
+        any: {
+            "@type": "type.googleapis.com/foo.Payload",
+            tag: "ok"
+        }
+    });
+    test.equal(root.lookupType("foo.Payload").decode(packed.any.value).tag, "ok",
+        "accepts canonical package-qualified Any type names");
+
+    var topOnlyRoot = protobuf.Root.fromJSON({
+        nested: {
+            google: {
+                nested: {
+                    protobuf: {
+                        nested: {
+                            Any: {
+                                fields: {
+                                    type_url: { type: "string", id: 1 },
+                                    value: { type: "bytes", id: 2 }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            Envelope: {
+                fields: {
+                    any: { type: "google.protobuf.Any", id: 1 }
+                }
+            },
+            Payload: {
+                fields: {
+                    name: { type: "string", id: 1 }
+                }
+            }
+        }
+    }).resolveAll();
+    var topEnvelope = topOnlyRoot.lookupType("Envelope");
+    var topLevel = protojson.fromJson(topEnvelope, {
+        any: {
+            "@type": "type.googleapis.com/Payload",
+            name: "solo"
+        }
+    });
+    test.equal(topOnlyRoot.lookupType("Payload").decode(topLevel.any.value).name, "solo",
+        "accepts canonical top-level Any type names");
+
+    var legacyFallback = protojson.fromJson(Envelope, {
+        any: {
+            "@type": "type.googleapis.com/Payload",
+            tag: "legacy"
+        }
+    });
+    test.equal(root.lookupType("foo.Payload").decode(legacyFallback.any.value).tag, "legacy",
+        "keeps legacy lookup behavior for non-canonical short Any type names");
+
+    test.throws(function() {
+        protojson.fromJson(topEnvelope, {
+            any: {
+                "@type": "Payload",
+                name: "bad"
+            }
+        });
+    }, /invalid Any type URL: Payload/, "rejects Any type URLs without a slash");
+
+    test.throws(function() {
+        protojson.fromJson(topEnvelope, {
+            any: {
+                "@type": "/Payload",
+                name: "bad"
+            }
+        });
+    }, /invalid Any type URL: \/Payload/, "rejects Any type URLs with an empty host");
+
+    test.throws(function() {
+        protojson.fromJson(topEnvelope, {
+            any: {
+                "@type": "type.googleapis.com/.Payload",
+                name: "bad"
+            }
+        });
+    }, /invalid Any type URL: type\.googleapis\.com\/\.Payload/, "rejects Any type names with a leading dot");
+
+    test.throws(function() {
+        protojson.toJson(topEnvelope, topEnvelope.create({
+            any: {
+                type_url: "Payload",
+                value: root.lookupType("foo.Payload").encode({ tag: "bad" }).finish()
+            }
+        }));
+    }, /invalid Any type URL: Payload/, "rejects malformed Any type URLs when formatting");
+
+    test.end();
+});
+
 tape.test("protojson - round trips well-known types", function(test) {
     var json = {
         any: {

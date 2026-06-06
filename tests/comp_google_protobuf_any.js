@@ -48,17 +48,54 @@ tape.test("google.protobuf.Any", function(test) {
     var obj = Foo.toObject(foo);
     test.same(obj.foo, { type_url: "Bar", value: [10, 1, 97] }, "should keep explicit Any in toObject properly");
 
-    obj = Foo.toObject(foo, { json: true });
-    test.same(obj.foo, { "@type": "type.googleapis.com/Bar", bar: "a" }, "should decode explicitly Any in toObject if requested");
+    test.throws(function() {
+        Foo.toObject(foo, { json: true });
+    }, /invalid Any type URL: Bar/, "should reject explicit Any JSON expansion without slash");
 
     foo = Foo.fromObject({
         foo: {
-            "@type": ".Bar",
+            type_url: "type.googleapis.com/Bar",
+            value: [1 << 3 | 2, 1, 97] // value = "a"
+        }
+    });
+    obj = Foo.toObject(foo, { json: true });
+    test.same(obj.foo, { "@type": "type.googleapis.com/Bar", bar: "a" }, "should decode explicitly Any in toObject if requested");
+
+    test.throws(function() {
+        Foo.fromObject({
+            foo: {
+                "@type": ".Bar",
+                bar: "a"
+            }
+        });
+    }, /invalid Any type URL: \.Bar/, "should reject Any @type with a leading dot");
+
+    foo = Foo.fromObject({
+        foo: {
+            "@type": "type.googleapis.com/Bar",
             bar: "a"
         }
     });
     test.ok(foo.foo instanceof Any.ctor, "should convert to Any in fromObject");
-    test.same(foo.foo, { type_url: "/Bar", value: protobuf.util.newBuffer([10, 1, 97]) }, "should have correct Any object when converted with fromObject");
+    test.same(foo.foo, { type_url: "type.googleapis.com/Bar", value: protobuf.util.newBuffer([10, 1, 97]) }, "should have correct Any object when converted with fromObject");
+
+    test.throws(function() {
+        Foo.fromObject({
+            foo: {
+                "@type": "Bar",
+                bar: "a"
+            }
+        });
+    }, /invalid Any type URL: Bar/, "should reject Any @type without slash");
+
+    test.throws(function() {
+        Foo.fromObject({
+            foo: {
+                "@type": "type.googleapis.com/Missing",
+                bar: "a"
+            }
+        });
+    }, /no such type: Missing/, "should reject unknown Any @type");
 
     var baz = Foo.fromObject({
         foo: {
@@ -68,6 +105,24 @@ tape.test("google.protobuf.Any", function(test) {
     });
     obj = Foo.toObject(baz, { json: true });
     test.same(obj.foo, { "@type": "type.someurl.com/Bar", bar: "a" }, "should keep prefix in type url");
+
+    test.throws(function() {
+        Foo.toObject(Foo.fromObject({
+            foo: {
+                type_url: "type.someurl.com/Missing",
+                value: [1 << 3 | 2, 1, 97]
+            }
+        }), { json: true });
+    }, /no such type: Missing/, "should reject unknown Any type_url when expanding to JSON");
+
+    test.throws(function() {
+        Foo.toObject(Foo.fromObject({
+            foo: {
+                type_url: "type.googleapis.com/.Bar",
+                value: [1 << 3 | 2, 1, 97]
+            }
+        }), { json: true });
+    }, /invalid Any type URL: type\.googleapis\.com\/\.Bar/, "should reject Any type_url with a leading dot when expanding to JSON");
 
     test.end();
 });
